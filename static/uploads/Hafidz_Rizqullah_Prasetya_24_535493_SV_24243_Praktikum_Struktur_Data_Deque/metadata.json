@@ -1,0 +1,44 @@
+{
+  "filename": "Hafidz_Rizqullah_Prasetya_24_535493_SV_24243_Praktikum_Struktur_Data_Deque",
+  "matkul": "Praktikum Struktur Data",
+  "pertemuan": "6",
+  "judul": "Deque",
+  "tanggal": "2025-03-20",
+  "nama": "Hafidz Rizqullah Prasetya",
+  "npm": "24/535493/SV/24243",
+  "kelas": "PL2A1",
+  "dosen": "Dr. Umar Taufiq, S.Kom., M.Cs.",
+  "tujuan": "ini tujuan\r\nini tujuan\r\nini tujuan",
+  "kesimpulan": "Praktikum ini berfokus pada pembuatan tata letak responsif menggunakan HTML dan CSS dengan pendekatan Flexbox, termasuk menyelesaikan tantangan ``Article Preview Component'' dari Frontend Mentor.\r\nSaya mengakses Frontend Mentor, login menggunakan akun GitHub, dan memilih tantangan tersebut untuk membangun komponen artikel yang responsif.",
+  "referensi": "CSS Flexbox,'' w3schools.com, 2025. [Online]. \\{\\}\r\nAvailable: \\{\\}url\\{https://www.w3schools.com/css/css3\\_flexbox.asp\\}. [Accessed: 25-Mar-2025].",
+  "dasar_teori_sections": {
+    "1": {
+      "title": "Pengenalan Deque",
+      "content": "Deque sering digunakan dalam berbagai aplikasi seperti:\r\n\\begin{itemize}\r\n    \\item \\textbf{Pemrograman Kompetitif:} Untuk implementasi struktur data antrian yang efisien.\r\n    \\item \\textbf{Simulasi:} Untuk memodelkan antrean yang memiliki proses masuk dan keluar di kedua ujung.\r\n    \\item \\textbf{Algoritma Sliding Window:} Untuk mengoptimalkan pencarian nilai maksimum atau minimum dalam jendela yang bergerak.\r\n\\end{itemize}",
+      "content_file": "dasar_teori_1_raw.txt",
+      "image": ""
+    },
+    "2": {
+      "title": "Bagian 2",
+      "content": "ssddadsad",
+      "content_file": "dasar_teori_2_raw.txt",
+      "image": ""
+    }
+  },
+  "main_sections": {
+    "1": {
+      "type": "section",
+      "title": "Latihan 1"
+    },
+    "1_1": {
+      "type": "subsection",
+      "title": "Soal 1",
+      "parent_section": "1",
+      "code": "Testing",
+      "code_file": "code_1_1_raw.txt",
+      "penjelasan": "Kode ini merupakan struktur HTML dasar dengan elemen \\texttt{<ul>} berkelas \\texttt{flex-container} yang berisi beberapa \\texttt{<li>} berkelas \\texttt{flex-item} (angka 1 hingga 6). \r\nBagian \\texttt{<head>} mencakup meta tag untuk karakter encoding, kompatibilitas browser, viewport, dan tautan ke file CSS eksternal (\\texttt{style.css}). \r\nKode CSS mendefinisikan \\texttt{.flex-container} sebagai flexbox dengan arah baris yang dapat membungkus, distribusi ruang merata, tanpa padding/margin, dan menghapus gaya daftar bawaan. \r\nSementara \\texttt{.flex-item} memiliki latar belakang tomato, padding 5px, dimensi 200x150px, margin atas 10px, tinggi baris 150px, teks putih tebal dengan ukuran 3em, dan perataan tengah.",
+      "penjelasan_file": "penjelasan_1_1_raw.txt",
+      "image": "img_20250327005619_3dea44.png"
+    }
+  }
+}

@@ -1,0 +1,8 @@
+Deque sering digunakan dalam berbagai aplikasi seperti:
+\begin{itemize}
+    \item \textbf{Pemrograman Kompetitif:} Untuk implementasi struktur data antrian yang efisien.
+
+    \item \textbf{Simulasi:} Untuk memodelkan antrean yang memiliki proses masuk dan keluar di kedua ujung.
+
+    \item \textbf{Algoritma Sliding Window:} Untuk mengoptimalkan pencarian nilai maksimum atau minimum dalam jendela yang bergerak.
+\end{itemize}

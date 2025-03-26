@@ -1,0 +1,4 @@
+Praktikum ini berfokus pada pembuatan tata letak responsif menggunakan HTML dan CSS dengan pendekatan Flexbox, termasuk menyelesaikan tantangan ``Article Preview Component'' dari Frontend Mentor.
+
+
+Saya mengakses Frontend Mentor, login menggunakan akun GitHub, dan memilih tantangan tersebut untuk membangun komponen artikel yang responsif.

@@ -1,0 +1,10 @@
+Kode ini merupakan struktur HTML dasar dengan elemen \texttt{<ul>} berkelas \texttt{flex-container} yang berisi beberapa \texttt{<li>} berkelas \texttt{flex-item} (angka 1 hingga 6). 
+
+
+Bagian \texttt{<head>} mencakup meta tag untuk karakter encoding, kompatibilitas browser, viewport, dan tautan ke file CSS eksternal (\texttt{style.css}). 
+
+
+Kode CSS mendefinisikan \texttt{.flex-container} sebagai flexbox dengan arah baris yang dapat membungkus, distribusi ruang merata, tanpa padding/margin, dan menghapus gaya daftar bawaan. 
+
+
+Sementara \texttt{.flex-item} memiliki latar belakang tomato, padding 5px, dimensi 200x150px, margin atas 10px, tinggi baris 150px, teks putih tebal dengan ukuran 3em, dan perataan tengah.

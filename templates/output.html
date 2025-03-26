@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Hasil Laporan Praktikum</title>
+    <!-- Ganti CDN Tailwind dengan versi lokal -->
+    <link
+      rel="icon"
+      type="image/x-icon"
+      href="{{ url_for('static', filename='favicon.ico') }}"
+    />
+
+    <!-- Format favicon modern -->
+    <link
+      rel="icon"
+      type="image/png"
+      sizes="16x16"
+      href="{{ url_for('static', filename='favicon-16x16.png') }}"
+    />
+    <link
+      rel="icon"
+      type="image/png"
+      sizes="32x32"
+      href="{{ url_for('static', filename='favicon-32x32.png') }}"
+    />
+    <link
+      rel="apple-touch-icon"
+      sizes="180x180"
+      href="{{ url_for('static', filename='apple-touch-icon.png') }}"
+    />
+    <link
+      rel="manifest"
+      href="{{ url_for('static', filename='site.webmanifest') }}"
+    />
+
+    <link
+      rel="stylesheet"
+      href="{{ url_for('static', filename='css/tailwind.min.css') }}"
+    />
+    <link
+      rel="stylesheet"
+      href="{{ url_for('static', filename='style.css') }}"
+    />
+    <style>
+        .btn {
+          display: inline-block;
+          padding: 8px 16px;
+          background-color: #4b5563;
+          color: white;
+          border-radius: 4px;
+          text-decoration: none;
+          margin-top: 10px;
+        }
+        .btn:hover {
+          background-color: #6b7280;
+        }
+        .copy {
+          position: absolute;
+          top: 10px;
+          right: 10px;
+          background-color: #3b82f6;
+          padding: 4px 8px;
+          border-radius: 4px;
+          color: white;
+          cursor: pointer;
+        }
+        .copy:hover {
+          background-color: #2563eb;
+        }
+        textarea {
+          width: 100%;
+          border: 1px solid #ccc;
+          border-radius: 4px;
+          padding: 10px;
+          background-color: #f9f9f9;
+        }
+        
+        /* Tambahan untuk notifikasi copy */
+        .copy-notification {
+          position: fixed;
+          top: 20px;
+          right: 20px;
+          background-color: #10B981;
+          color: white;
+          padding: 10px 16px;
+          border-radius: 4px;
+          box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+          opacity: 0;
+          transition: opacity 0.3s ease;
+          z-index: 100;
+        }
+        
+        .copy-notification.show {
+          opacity: 1;
+        }
+        
+        /* Style untuk tombol copy yang lebih menarik */
+        .btn-copy {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 6px;
+          background-color: #3b82f6;
+          color: white;
+          border: none;
+          border-radius: 4px;
+          padding: 8px 16px;
+          font-size: 14px;
+          font-weight: 500;
+          cursor: pointer;
+          transition: background-color 0.2s;
+        }
+        
+        .btn-copy:hover {
+          background-color: #2563eb;
+        }
+        
+        .btn-copy svg {
+          width: 16px;
+          height: 16px;
+        }
+      </style>
+    </head>
+    <body class="bg-gray-100 min-h-screen flex items-center justify-center p-6">
+      <div class="container max-w-4xl mx-auto bg-white p-6 rounded-lg shadow-md">
+        <h1 class="text-2xl font-bold mb-4">Hasil Kode LaTeX</h1>
+        <p class="text-gray-600 mb-4">
+          Salin kode di bawah ini ke Overleaf untuk diekspor sebagai PDF.
+        </p>
+        
+        <!-- Tambahkan tombol Copy All di atas textarea -->
+        <div class="flex justify-end mb-2">
+          <button id="copyAllBtn" class="btn-copy" onclick="copyAllLatex()">
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" />
+            </svg>
+            Salin Semua Kode
+          </button>
+        </div>
+        
+        <div class="relative mb-6">
+          <textarea id="latexCode" rows="20" readonly class="font-mono">{{ latex_content }}</textarea>
+          <button onclick="copyToClipboard()" class="copy">Copy</button>
+        </div>
+        
+        <div class="mb-6">
+          <h2 class="text-xl font-semibold mb-2">Download</h2>
+          <div class="flex flex-wrap gap-2">
+            <a href="{{ url_for('download_tex', filename=filename) }}" class="btn bg-blue-500 hover:bg-blue-600">
+              Download .tex
+            </a>
+          </div>
+        </div>
+        
+        {% if images %}
+        <div class="mt-6">
+          <div class="flex justify-between items-center mb-2">
+            <h2 class="text-xl font-semibold">Gambar ({{ images|length }})</h2>
+            <a href="{{ url_for('download_image_zip', filename=filename) }}" class="btn bg-purple-500 hover:bg-purple-600">
+              <div class="flex items-center gap-2">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                  <path fill-rule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm3.293-7.707a1 1 0 011.414 0L10 12.586l2.293-2.293a1 1 0 111.414 1.414l-3 3a1 1 0 01-1.414 0l-3-3a1 1 0 010-1.414z" clip-rule="evenodd" />
+                </svg>
+                Download All Images
+              </div>
+            </a>
+          </div>
+          
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {% for image in images %}
+            <div class="image-card border rounded p-3">
+              <div class="flex justify-between items-center mb-2">
+                <span class="font-medium truncate">{{ image.name }}</span>
+              </div>
+              <div class="flex justify-center">
+                <img src="{{ url_for('static', filename='uploads/' + filename + '/' + image.name) }}" alt="{{ image.name }}" class="max-h-48 object-contain" />
+              </div>
+            </div>
+            {% endfor %}
+          </div>
+        </div>
+        {% else %}
+        <div class="mt-6 p-4 bg-gray-50 rounded border">
+          <p class="text-gray-600 text-center">Tidak ada gambar yang digunakan dalam dokumen ini.</p>
+        </div>
+        {% endif %}
+        
+        <div class="mt-6 text-center">
+          <a href="{{ url_for('edit', filename=filename) }}" class="btn bg-gray-600 hover:bg-gray-700">
+            <div class="flex items-center gap-2">
+              <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                <path fill-rule="evenodd" d="M9.707 14.707a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414l4-4a1 1 0 011.414 1.414L7.414 9H15a1 1 0 110 2H7.414l2.293 2.293a1 1 0 010 1.414z" clip-rule="evenodd" />
+              </svg>
+              Kembali ke Edit
+            </div>
+          </a>
+        </div>
+      </div>
+      
+      <!-- Notifikasi saat copy berhasil -->
+      <div id="copyNotification" class="copy-notification">
+        <div class="flex items-center gap-2">
+          <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+            <path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd" />
+          </svg>
+          <span id="notificationText">LaTeX berhasil disalin!</span>
+        </div>
+      </div>
+  
+      <script>
+        // Fungsi untuk menyalin bagian tertentu dari kode
+        function copyToClipboard() {
+          const textarea = document.getElementById("latexCode");
+          textarea.select();
+          
+          try {
+            // Modern API untuk copy
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+              navigator.clipboard.writeText(textarea.value);
+              showCopyNotification("Kode berhasil disalin!");
+            } else {
+              // Fallback untuk browser lama
+              const successful = document.execCommand("copy");
+              if (successful) {
+                showCopyNotification("Kode berhasil disalin!");
+              } else {
+                alert("Gagal menyalin ke clipboard!");
+              }
+            }
+          } catch (err) {
+            console.error('Error saat menyalin: ', err);
+            alert("Gagal menyalin ke clipboard: " + err);
+          }
+        }
+        
+        // Fungsi untuk menyalin semua kode LaTeX
+        function copyAllLatex() {
+          const textarea = document.getElementById("latexCode");
+          
+          try {
+            // Modern API untuk copy
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+              navigator.clipboard.writeText(textarea.value);
+              showCopyNotification("Semua kode LaTeX berhasil disalin!");
+            } else {
+              // Fallback untuk browser lama
+              textarea.select();
+              const successful = document.execCommand("copy");
+              if (successful) {
+                showCopyNotification("Semua kode LaTeX berhasil disalin!");
+              } else {
+                alert("Gagal menyalin ke clipboard!");
+              }
+            }
+          } catch (err) {
+            console.error('Error saat menyalin: ', err);
+            alert("Gagal menyalin ke clipboard: " + err);
+          }
+        }
+        
+        function showCopyNotification(message) {
+          const notification = document.getElementById("copyNotification");
+          const notificationText = document.getElementById("notificationText");
+          notificationText.textContent = message;
+          notification.classList.add("show");
+          
+          // Hilangkan notifikasi setelah 2 detik
+          setTimeout(() => {
+            notification.classList.remove("show");
+          }, 2000);
+        }
+      </script>
+    </body>
+  </html>
