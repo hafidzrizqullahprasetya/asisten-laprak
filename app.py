@@ -18,7 +18,7 @@ from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
 import tempfile
-from database import init_db, db_connection  # Impor fungsi database
+from database import init_db, db_connection
 
 try:
     from PIL import Image
@@ -91,7 +91,7 @@ app.secret_key = secrets.token_hex(16)
 app.config['UPLOAD_FOLDER'] = 'static/uploads'
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024
 
-# Inisialisasi database SQLite
+# Inisialisasi database Supabase (PostgreSQL)
 init_db()
 
 # Mapping matkul ke dosen
@@ -294,10 +294,12 @@ REFERENSI
 
 # Fungsi utilitas
 def get_filenames():
-    """Mendapatkan daftar filename dari SQLite"""
+    """Mendapatkan daftar filename dari Supabase (PostgreSQL)"""
     try:
         with db_connection() as conn:
-            laporans = conn.execute('SELECT filename, metadata FROM laporan').fetchall()
+            cursor = conn.cursor()
+            cursor.execute('SELECT filename, metadata FROM laporan')
+            laporans = cursor.fetchall()
             filenames = []
             for laporan in laporans:
                 metadata = json.loads(laporan['metadata']) if laporan['metadata'] else {}
@@ -313,7 +315,7 @@ def get_filenames():
         filenames.sort(key=lambda x: x['last_modified'], reverse=True)
         return filenames
     except Exception as e:
-        print(f"❌ Error getting filenames from SQLite: {e}")
+        print(f"❌ Error getting filenames from Supabase: {e}")
         return []
 
 def standardize_filename(name, npm, matkul, judul):
@@ -546,38 +548,49 @@ def index():
             'main_sections': main_sections
         }
 
-        # Simpan ke SQLite
-        with db_connection() as conn:
-            conn.execute('''
-                INSERT OR REPLACE INTO laporan (filename, metadata, tujuan, kesimpulan, referensi)
-                VALUES (?, ?, ?, ?, ?)
-            ''', (filename, json.dumps(metadata), tujuan, kesimpulan, referensi))
+        # Simpan ke Supabase (PostgreSQL)
+        try:
+            with db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    INSERT INTO laporan (filename, metadata, tujuan, kesimpulan, referensi)
+                    VALUES (%s, %s, %s, %s, %s)
+                    ON CONFLICT (filename) DO UPDATE
+                    SET metadata = EXCLUDED.metadata,
+                        tujuan = EXCLUDED.tujuan,
+                        kesimpulan = EXCLUDED.kesimpulan,
+                        referensi = EXCLUDED.referensi
+                ''', (filename, json.dumps(metadata), tujuan, kesimpulan, referensi))
 
-            conn.execute('DELETE FROM sections WHERE filename = ?', (filename,))
+                cursor.execute('DELETE FROM sections WHERE filename = %s', (filename,))
 
-            for section_id, section in dasar_teori_sections.items():
-                conn.execute('''
-                    INSERT INTO sections (filename, section_id, type, title, content, image)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                ''', (filename, f"dasar_teori_{section_id}", 'dasar_teori', section['title'], section['content'], section['image']))
+                for section_id, section in dasar_teori_sections.items():
+                    cursor.execute('''
+                        INSERT INTO sections (filename, section_id, type, title, content, image)
+                        VALUES (%s, %s, %s, %s, %s, %s)
+                    ''', (filename, f"dasar_teori_{section_id}", 'dasar_teori', section['title'], section['content'], section['image']))
 
-            for section_id, section in main_sections.items():
-                if section['type'] == 'section':
-                    conn.execute('''
-                        INSERT INTO sections (filename, section_id, type, title)
-                        VALUES (?, ?, ?, ?)
-                    ''', (filename, section_id, 'section', section['title']))
-                else:
-                    conn.execute('''
-                        INSERT INTO sections (filename, section_id, type, title, content, image, parent_section)
-                        VALUES (?, ?, ?, ?, ?, ?, ?)
-                    ''', (filename, section_id, 'subsection', section['title'], section.get('code', ''), section.get('image', ''), section.get('parent_section', '')))
-                    conn.execute('''
-                        INSERT INTO sections (filename, section_id, type, title, content, parent_section)
-                        VALUES (?, ?, ?, ?, ?, ?)
-                    ''', (filename, f"penjelasan_{section_id}", 'penjelasan', section['title'], section.get('penjelasan', ''), section_id))
+                for section_id, section in main_sections.items():
+                    if section['type'] == 'section':
+                        cursor.execute('''
+                            INSERT INTO sections (filename, section_id, type, title)
+                            VALUES (%s, %s, %s, %s)
+                        ''', (filename, section_id, 'section', section['title']))
+                    else:
+                        cursor.execute('''
+                            INSERT INTO sections (filename, section_id, type, title, content, image, parent_section)
+                            VALUES (%s, %s, %s, %s, %s, %s, %s)
+                        ''', (filename, section_id, 'subsection', section['title'], section.get('code', ''), section.get('image', ''), section.get('parent_section', '')))
+                        cursor.execute('''
+                            INSERT INTO sections (filename, section_id, type, title, content, parent_section)
+                            VALUES (%s, %s, %s, %s, %s, %s)
+                        ''', (filename, f"penjelasan_{section_id}", 'penjelasan', section['title'], section.get('penjelasan', ''), section_id))
 
-            conn.commit()
+                conn.commit()
+        except Exception as e:
+            print(f"❌ Error saving to Supabase: {e}")
+            flash(f'Error saving data to database: {str(e)}', 'error')
+            return render_template('form.html', form_data=request.form, matkul_dosen=MATKUL_DOSEN, filenames=get_filenames())
 
         # Jika edit mode, salin file gambar dari folder lama di Google Drive
         if edit_mode and original_filename and original_filename != filename:
@@ -613,47 +626,55 @@ def index():
 
     last_filename = session.get('last_filename')
     if last_filename:
-        with db_connection() as conn:
-            laporan = conn.execute('SELECT * FROM laporan WHERE filename = ?', (last_filename,)).fetchone()
-            if not laporan:
-                return render_template('form.html', form_data=None, matkul_dosen=MATKUL_DOSEN, filenames=get_filenames())
+        try:
+            with db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('SELECT * FROM laporan WHERE filename = %s', (last_filename,))
+                laporan = cursor.fetchone()
+                if not laporan:
+                    return render_template('form.html', form_data=None, matkul_dosen=MATKUL_DOSEN, filenames=get_filenames())
 
-            metadata = json.loads(laporan['metadata']) if laporan['metadata'] else {}
-            sections = conn.execute('SELECT * FROM sections WHERE filename = ?', (last_filename,)).fetchall()
-            dasar_teori_sections = {}
-            main_sections = {}
+                metadata = json.loads(laporan['metadata']) if laporan['metadata'] else {}
+                cursor.execute('SELECT * FROM sections WHERE filename = %s', (last_filename,))
+                sections = cursor.fetchall()
+                dasar_teori_sections = {}
+                main_sections = {}
 
-            for section in sections:
-                if section['type'] == 'dasar_teori':
-                    section_id = section['section_id'].replace('dasar_teori_', '')
-                    dasar_teori_sections[section_id] = {
-                        'title': section['title'],
-                        'content': section['content'],
-                        'image': section['image']
-                    }
-                elif section['type'] == 'section':
-                    main_sections[section['section_id']] = {
-                        'type': 'section',
-                        'title': section['title']
-                    }
-                elif section['type'] == 'subsection':
-                    main_sections[section['section_id']] = {
-                        'type': 'subsection',
-                        'title': section['title'],
-                        'code': section['content'],
-                        'image': section['image'],
-                        'parent_section': section['parent_section']
-                    }
-                elif section['type'] == 'penjelasan':
-                    section_id = section['parent_section']
-                    if section_id in main_sections:
-                        main_sections[section_id]['penjelasan'] = section['content']
+                for section in sections:
+                    if section['type'] == 'dasar_teori':
+                        section_id = section['section_id'].replace('dasar_teori_', '')
+                        dasar_teori_sections[section_id] = {
+                            'title': section['title'],
+                            'content': section['content'],
+                            'image': section['image']
+                        }
+                    elif section['type'] == 'section':
+                        main_sections[section['section_id']] = {
+                            'type': 'section',
+                            'title': section['title']
+                        }
+                    elif section['type'] == 'subsection':
+                        main_sections[section['section_id']] = {
+                            'type': 'subsection',
+                            'title': section['title'],
+                            'code': section['content'],
+                            'image': section['image'],
+                            'parent_section': section['parent_section']
+                        }
+                    elif section['type'] == 'penjelasan':
+                        section_id = section['parent_section']
+                        if section_id in main_sections:
+                            main_sections[section_id]['penjelasan'] = section['content']
 
-            metadata['dasar_teori_sections'] = dasar_teori_sections
-            metadata['main_sections'] = main_sections
-            metadata['tujuan'] = laporan['tujuan']
-            metadata['kesimpulan'] = laporan['kesimpulan']
-            metadata['referensi'] = laporan['referensi']
+                metadata['dasar_teori_sections'] = dasar_teori_sections
+                metadata['main_sections'] = main_sections
+                metadata['tujuan'] = laporan['tujuan']
+                metadata['kesimpulan'] = laporan['kesimpulan']
+                metadata['referensi'] = laporan['referensi']
+        except Exception as e:
+            print(f"❌ Error loading last filename from Supabase: {e}")
+            flash(f'Error loading last file: {str(e)}', 'error')
+            return render_template('form.html', form_data=None, matkul_dosen=MATKUL_DOSEN, filenames=get_filenames())
 
         flash(f'Melanjutkan pengeditan {last_filename}', 'info')
         return render_template('form.html', form_data=metadata, matkul_dosen=MATKUL_DOSEN, filenames=get_filenames())
@@ -663,13 +684,16 @@ def index():
 def edit(filename):
     try:
         with db_connection() as conn:
-            laporan = conn.execute('SELECT * FROM laporan WHERE filename = ?', (filename,)).fetchone()
+            cursor = conn.cursor()
+            cursor.execute('SELECT * FROM laporan WHERE filename = %s', (filename,))
+            laporan = cursor.fetchone()
             if not laporan:
                 flash(f'File {filename} tidak ditemukan', 'error')
                 return redirect('/')
 
             metadata = json.loads(laporan['metadata']) if laporan['metadata'] else {}
-            sections = conn.execute('SELECT * FROM sections WHERE filename = ?', (filename,)).fetchall()
+            cursor.execute('SELECT * FROM sections WHERE filename = %s', (filename,))
+            sections = cursor.fetchall()
             dasar_teori_sections = {}
             main_sections = {}
 
@@ -737,13 +761,16 @@ def generate_latex(filename):
     
     try:
         with db_connection() as conn:
-            laporan = conn.execute('SELECT * FROM laporan WHERE filename = ?', (filename,)).fetchone()
+            cursor = conn.cursor()
+            cursor.execute('SELECT * FROM laporan WHERE filename = %s', (filename,))
+            laporan = cursor.fetchone()
             if not laporan:
                 flash(f'File {filename} tidak ditemukan', 'error')
                 return redirect('/')
 
             metadata = json.loads(laporan['metadata']) if laporan['metadata'] else {}
-            sections = conn.execute('SELECT * FROM sections WHERE filename = ?', (filename,)).fetchall()
+            cursor.execute('SELECT * FROM sections WHERE filename = %s', (filename,))
+            sections = cursor.fetchall()
             dasar_teori_sections = {}
             main_sections = {}
 
@@ -862,13 +889,16 @@ def generate_latex(filename):
 def download_image_zip(filename):
     try:
         with db_connection() as conn:
-            laporan = conn.execute('SELECT * FROM laporan WHERE filename = ?', (filename,)).fetchone()
+            cursor = conn.cursor()
+            cursor.execute('SELECT * FROM laporan WHERE filename = %s', (filename,))
+            laporan = cursor.fetchone()
             if not laporan:
                 flash(f'File {filename} tidak ditemukan', 'error')
                 return redirect(url_for('generate_latex', filename=filename))
 
             metadata = json.loads(laporan['metadata']) if laporan['metadata'] else {}
-            sections = conn.execute('SELECT * FROM sections WHERE filename = ?', (filename,)).fetchall()
+            cursor.execute('SELECT * FROM sections WHERE filename = %s', (filename,))
+            sections = cursor.fetchall()
             dasar_teori_sections = {}
             main_sections = {}
 
@@ -1133,12 +1163,15 @@ def allowed_file(filename):
 def debug_latex_content(filename):
     try:
         with db_connection() as conn:
-            laporan = conn.execute('SELECT * FROM laporan WHERE filename = ?', (filename,)).fetchone()
+            cursor = conn.cursor()
+            cursor.execute('SELECT * FROM laporan WHERE filename = %s', (filename,))
+            laporan = cursor.fetchone()
             if not laporan:
                 return f"Metadata not found for {filename}", 404
 
             metadata = json.loads(laporan['metadata']) if laporan['metadata'] else {}
-            sections = conn.execute('SELECT * FROM sections WHERE filename = ?', (filename,)).fetchall()
+            cursor.execute('SELECT * FROM sections WHERE filename = %s', (filename,))
+            sections = cursor.fetchall()
             dasar_teori_sections = {}
             main_sections = {}
 
@@ -1216,12 +1249,6 @@ def debug_latex_content(filename):
                 penjelasan_html = penjelasan.replace('&', '&').replace('<', '<').replace('>', '>')
                 output.append("<pre style='background:#f5f5f5;padding:10px;border:1px solid #ddd;white-space:pre-wrap'>" + penjelasan_html + "</pre>")
                 
-        output.append("<h2>Test LaTeX Generation</h2>")
-        output.append("<form method='post' action='/test_latex_generation'>")
-        output.append(f"<input type='hidden' name='filename' value='{filename}'>")
-        output.append("<button type='submit' style='background:#007bff;color:white;padding:10px 20px;border:none;cursor:pointer;margin-top:10px'>Generate Test LaTeX</button>")
-        output.append("</form>")
-        
         return "".join(output)
         
     except Exception as e:

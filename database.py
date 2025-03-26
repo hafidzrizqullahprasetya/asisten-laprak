@@ -1,11 +1,14 @@
-import sqlite3
+import psycopg2
 from contextlib import contextmanager
+from psycopg2.extras import RealDictCursor
+import os
 
-DATABASE = 'laporan.db'
+# Ambil URL database dari environment variable
+DATABASE_URL = os.getenv('POSTGRES_URL')
 
 def get_db():
-    conn = sqlite3.connect(DATABASE)
-    conn.row_factory = sqlite3.Row
+    # Pastikan sslmode=require ada di connection string
+    conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
     return conn
 
 @contextmanager
@@ -18,8 +21,8 @@ def db_connection():
 
 def init_db():
     with db_connection() as conn:
-        # Tabel untuk menyimpan metadata laporan
-        conn.execute('''
+        cursor = conn.cursor()
+        cursor.execute('''
             CREATE TABLE IF NOT EXISTS laporan (
                 filename TEXT PRIMARY KEY,
                 metadata TEXT,
@@ -28,10 +31,9 @@ def init_db():
                 referensi TEXT
             )
         ''')
-        # Tabel untuk menyimpan sections (dasar teori, main sections, subsections, dll.)
-        conn.execute('''
+        cursor.execute('''
             CREATE TABLE IF NOT EXISTS sections (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id SERIAL PRIMARY KEY,
                 filename TEXT,
                 section_id TEXT,
                 type TEXT,
@@ -39,7 +41,9 @@ def init_db():
                 content TEXT,
                 image TEXT,
                 parent_section TEXT,
-                FOREIGN KEY (filename) REFERENCES laporan(filename)
+                CONSTRAINT fk_laporan
+                    FOREIGN KEY (filename)
+                    REFERENCES laporan(filename)
             )
         ''')
         conn.commit()
