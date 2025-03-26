@@ -1158,3 +1158,5 @@ def debug_latex_content(filename):
 
 if __name__ == '__main__':
     app.run(debug=True)
+
+application = app
