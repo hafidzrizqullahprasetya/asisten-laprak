@@ -14,6 +14,10 @@ from dotenv import load_dotenv
 import difflib
 import google.generativeai as genai
 import secrets
+from google.oauth2 import service_account
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
+import tempfile
 
 try:
     from PIL import Image
@@ -22,6 +26,42 @@ except ImportError:
     Image = None
 
 load_dotenv()
+
+def init_drive_client():
+    credentials_json = os.getenv('GOOGLE_CREDENTIALS')
+    credentials_dict = json.loads(credentials_json)
+    credentials = service_account.Credentials.from_service_account_info(
+        credentials_dict,
+        scopes=['https://www.googleapis.com/auth/drive']
+    )
+    return build('drive', 'v3', credentials=credentials)
+
+drive_client = init_drive_client()
+folder_id = os.getenv('GOOGLE_DRIVE_FOLDER_ID')
+
+def find_or_create_folder(filename):
+    # Cari folder dengan nama filename
+    query = f"'{folder_id}' in parents and name = '{filename}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
+    response = drive_client.files().list(q=query, spaces='drive', fields='files(id)').execute()
+    folders = response.get('files', [])
+
+    if folders:
+        return folders[0]['id']
+    else:
+        # Buat folder baru jika tidak ada
+        folder_metadata = {
+            'name': filename,
+            'mimeType': 'application/vnd.google-apps.folder',
+            'parents': [folder_id]
+        }
+        folder = drive_client.files().create(body=folder_metadata, fields='id').execute()
+        return folder['id']
+
+def find_file_in_folder(filename, parent_folder_id):
+    query = f"'{parent_folder_id}' in parents and name = '{filename}' and trashed = false"
+    response = drive_client.files().list(q=query, spaces='drive', fields='files(id)').execute()
+    files = response.get('files', [])
+    return files[0]['id'] if files else None
 
 # Gemini API key
 GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY')
@@ -254,31 +294,40 @@ REFERENSI
 
 # Fungsi utilitas
 def get_filenames():
-    """Mendapatkan daftar filename dari folder uploads berdasarkan metadata.json"""
-    uploads_dir = os.path.join(app.config['UPLOAD_FOLDER'])
-    if not os.path.exists(uploads_dir):
+    """Mendapatkan daftar filename dari Google Drive berdasarkan folder"""
+    try:
+        query = f"'{folder_id}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
+        response = drive_client.files().list(
+            q=query,
+            spaces='drive',
+            fields='files(id, name, modifiedTime)'
+        ).execute()
+        folders = response.get('files', [])
+
+        filenames = []
+        for folder in folders:
+            # Cari metadata.json di dalam folder
+            metadata = read_metadata_json(folder['name'])
+            if not metadata:
+                print(f"Skipping folder {folder['name']} due to missing metadata")
+                continue
+            filenames.append({
+                'filename': folder['name'],
+                'nama': metadata.get('nama', ''),
+                'judul': metadata.get('judul', ''),
+                'matkul': metadata.get('matkul', ''),
+                'tanggal': metadata.get('tanggal', ''),
+                'last_modified': folder.get('modifiedTime', '')
+            })
+
+        filenames.sort(key=lambda x: x['last_modified'], reverse=True)
+        return filenames
+    except Exception as e:
+        print(f"❌ Error getting filenames from Google Drive: {e}")
         return []
-    filenames = [
-        {
-            'filename': f,
-            'nama': '',
-            'judul': '',
-            'matkul': '',
-            'tanggal': '',
-            'last_modified': os.path.getmtime(os.path.join(uploads_dir, f, "metadata.json"))
-        }
-        for f in os.listdir(uploads_dir)
-        if os.path.isdir(os.path.join(uploads_dir, f)) and os.path.exists(os.path.join(uploads_dir, f, "metadata.json"))
-    ]
-    filenames.sort(key=lambda x: x['last_modified'], reverse=True)
-    return filenames
 
 def save_latex_to_txt_file(filename, content, section_id):
-    """Simpan konten LaTeX ke file .txt dengan mempertahankan format paragraf"""
-    project_dir = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-    os.makedirs(project_dir, exist_ok=True)
-    file_path = os.path.join(project_dir, f"{section_id}_raw.txt")
-    
+    """Simpan konten LaTeX ke Google Drive dengan mempertahankan format paragraf"""
     try:
         # Pertahankan format paragraf yang benar
         content = re.sub(r'\n{3,}', '\n\n', content)
@@ -287,54 +336,162 @@ def save_latex_to_txt_file(filename, content, section_id):
         content = re.sub(r'(\\end\{[^}]+\})(\S)', r'\1\n\n\2', content)
         content = re.sub(r'(\S)(\\begin\{[^}]+\})', r'\1\n\n\2', content)
         content = re.sub(r'(\\item[^\n]+)\n(?!\\item|\\end)', r'\1\n\n', content)
-        
-        with open(file_path, 'w', encoding='utf-8') as f:
-            f.write(content)
-        
-        backslash_count = content.count('\\')
-        paragraph_count = content.count('\n\n') + 1
-        print(f"✓ LaTeX content saved to {file_path}: {len(content)} chars, {backslash_count} backslashes, {paragraph_count} paragraphs")
-        return True
+
+        # Gunakan tempfile untuk membuat file sementara
+        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.txt')
+        temp_file_path = temp_file.name
+
+        try:
+            with open(temp_file_path, 'w', encoding='utf-8') as f:
+                f.write(content)
+
+            # Pastikan file ditutup sebelum diunggah
+            temp_file.close()
+
+            # Cari folder proyek di Google Drive
+            project_folder_id = find_or_create_folder(filename)
+
+            # Cari file yang sudah ada
+            file_id = find_file_in_folder(f'{section_id}_raw.txt', project_folder_id)
+
+            if file_id:
+                # Update file jika sudah ada
+                media = MediaFileUpload(temp_file_path, mimetype='text/plain')
+                drive_client.files().update(
+                    fileId=file_id,
+                    media_body=media
+                ).execute()
+            else:
+                # Buat file baru jika belum ada
+                file_metadata = {
+                    'name': f'{section_id}_raw.txt',
+                    'parents': [project_folder_id]
+                }
+                media = MediaFileUpload(temp_file_path, mimetype='text/plain')
+                drive_client.files().create(
+                    body=file_metadata,
+                    media_body=media,
+                    fields='id'
+                ).execute()
+
+            backslash_count = content.count('\\')
+            paragraph_count = content.count('\n\n') + 1
+            print(f"✓ LaTeX content saved to Google Drive for {section_id}: {len(content)} chars, {backslash_count} backslashes, {paragraph_count} paragraphs")
+            return True
+        finally:
+            # Hapus file sementara dengan penundaan kecil
+            import time
+            time.sleep(0.1)  # Tunggu 100ms
+            try:
+                if os.path.exists(temp_file_path):
+                    os.remove(temp_file_path)
+                    print(f"Deleted temporary file {temp_file_path}")
+            except Exception as e:
+                print(f"❌ Error deleting temporary file {temp_file_path}: {e}")
     except Exception as e:
-        print(f"❌ Error saving LaTeX content to {file_path}: {str(e)}")
+        print(f"❌ Error saving LaTeX content to Google Drive for {section_id}: {str(e)}")
         return False
 
 def read_latex_from_txt_file(filename, section_id):
-    """Membaca konten LaTeX dari file .txt dengan mempertahankan format"""
-    file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename, f"{section_id}_raw.txt")
-    if not os.path.exists(file_path):
-        print(f"❌ File not found: {file_path}")
-        return ""
-    
+    """Membaca konten LaTeX dari Google Drive dengan mempertahankan format"""
     try:
-        with open(file_path, 'r', encoding='utf-8') as f:
-            content = f.read()
-        
+        project_folder_id = find_or_create_folder(filename)
+        file_id = find_file_in_folder(f'{section_id}_raw.txt', project_folder_id)
+        if not file_id:
+            print(f"❌ File not found in Google Drive: {section_id}_raw.txt")
+            return ""
+
+        request = drive_client.files().get_media(fileId=file_id)
+        file_stream = io.BytesIO()
+        downloader = MediaIoBaseDownload(file_stream, request)
+        done = False
+        while not done:
+            status, done = downloader.next_chunk()
+        file_stream.seek(0)
+        content = file_stream.read().decode('utf-8')
+
         backslash_count = content.count('\\')
         paragraph_count = content.count('\n\n') + 1
-        print(f"✓ Read LaTeX from {file_path}: {len(content)} chars, {backslash_count} backslashes, {paragraph_count} paragraphs")
+        print(f"✓ Read LaTeX from Google Drive for {section_id}: {len(content)} chars, {backslash_count} backslashes, {paragraph_count} paragraphs")
         return content
     except Exception as e:
-        print(f"❌ Error reading file {file_path}: {e}")
+        print(f"❌ Error reading file from Google Drive for {section_id}: {e}")
         return ""
 
 def save_metadata_json(filename, data):
-    """Simpan metadata ke file JSON"""
-    project_dir = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-    os.makedirs(project_dir, exist_ok=True)
-    file_path = os.path.join(project_dir, "metadata.json")
-    with open(file_path, 'w', encoding='utf-8') as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-    print(f"Metadata saved to {file_path}")
+    """Simpan metadata ke Google Drive sebagai file JSON"""
+    try:
+        # Gunakan tempfile untuk membuat file sementara
+        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.json')
+        temp_file_path = temp_file.name
+
+        try:
+            with open(temp_file_path, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+
+            # Pastikan file ditutup sebelum diunggah
+            temp_file.close()
+
+            # Cari folder proyek di Google Drive
+            project_folder_id = find_or_create_folder(filename)
+
+            # Cari file metadata.json yang sudah ada
+            file_id = find_file_in_folder('metadata.json', project_folder_id)
+            if file_id:
+                # Update file jika sudah ada
+                media = MediaFileUpload(temp_file_path, mimetype='application/json')
+                drive_client.files().update(
+                    fileId=file_id,
+                    media_body=media
+                ).execute()
+            else:
+                # Buat file baru jika belum ada
+                file_metadata = {
+                    'name': 'metadata.json',
+                    'parents': [project_folder_id]
+                }
+                media = MediaFileUpload(temp_file_path, mimetype='application/json')
+                drive_client.files().create(
+                    body=file_metadata,
+                    media_body=media,
+                    fields='id'
+                ).execute()
+
+            print(f"Metadata saved to Google Drive for {filename}")
+        finally:
+            # Hapus file sementara dengan penundaan kecil
+            import time
+            time.sleep(0.1)  # Tunggu 100ms
+            try:
+                if os.path.exists(temp_file_path):
+                    os.remove(temp_file_path)
+                    print(f"Deleted temporary file {temp_file_path}")
+            except Exception as e:
+                print(f"❌ Error deleting temporary file {temp_file_path}: {e}")
+    except Exception as e:
+        print(f"❌ Error saving metadata to Google Drive for {filename}: {str(e)}")
+        raise
 
 def read_metadata_json(filename):
-    """Baca metadata dari file JSON"""
-    file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename, "metadata.json")
-    if not os.path.exists(file_path):
-        print(f"Warning: Metadata file {file_path} not found")
+    """Baca metadata dari Google Drive"""
+    try:
+        project_folder_id = find_or_create_folder(filename)
+        file_id = find_file_in_folder('metadata.json', project_folder_id)
+        if not file_id:
+            print(f"Warning: Metadata file not found in Google Drive for {filename}")
+            return {}
+
+        request = drive_client.files().get_media(fileId=file_id)
+        file_stream = io.BytesIO()
+        downloader = MediaIoBaseDownload(file_stream, request)
+        done = False
+        while not done:
+            status, done = downloader.next_chunk()
+        file_stream.seek(0)
+        return json.loads(file_stream.read().decode('utf-8'))
+    except Exception as e:
+        print(f"❌ Error reading metadata from Google Drive for {filename}: {e}")
         return {}
-    with open(file_path, 'r', encoding='utf-8') as f:
-        return json.load(f)
 
 def standardize_filename(name, npm, matkul, judul):
     """Membuat nama file yang konsisten"""
@@ -526,26 +683,19 @@ def index():
         def clean_text(text):
             if not text:
                 return ''
-            # Hapus spasi di awal dan akhir
             text = text.strip()
-            # Ganti multiple newlines dengan single newline
             text = re.sub(r'\n\s*\n+', '\n', text)
             return text
 
-        # Terapkan pembersihan teks pada field yang relevan
         tujuan = clean_text(tujuan)
         kesimpulan = clean_text(kesimpulan)
         referensi = clean_text(referensi)
 
-        # Validasi data wajib
         if not all([nama, npm, matkul, judul]):
             flash('Nama, NPM, Mata Kuliah, dan Judul harus diisi!', 'error')
             return render_template('form.html', form_data=request.form, matkul_dosen=MATKUL_DOSEN, filenames=get_filenames())
 
-        # Tentukan filename dan folder proyek
         filename = standardize_filename(nama, npm, matkul, judul)
-        project_dir = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-        os.makedirs(project_dir, exist_ok=True)
 
         # Process Dasar Teori Sections
         dasar_teori_sections = {}
@@ -554,12 +704,11 @@ def index():
                 section_id = request.form[key]
                 content_key = f'dasar_teori_section_content_{section_id}'
                 raw_content = request.form.get(content_key, '').strip()
-                raw_content = clean_text(raw_content)  # Bersihkan teks
-                # Simpan konten ke file teks
+                raw_content = clean_text(raw_content)
                 save_latex_to_txt_file(filename, raw_content, f"dasar_teori_{section_id}")
                 dasar_teori_sections[section_id] = {
                     'title': request.form.get(f'dasar_teori_section_title_{section_id}', '').strip(),
-                    'content': raw_content,  # Simpan juga di metadata sebagai fallback
+                    'content': raw_content,
                     'content_file': f"dasar_teori_{section_id}_raw.txt",
                     'image': request.form.get(f'dasar_teori_section_image_{section_id}', '').strip()
                 }
@@ -580,17 +729,17 @@ def index():
                     penjelasan_key = f'penjelasan_{section_id}'
                     code_content = request.form.get(code_key, '').strip()
                     penjelasan_content = request.form.get(penjelasan_key, '').strip()
-                    code_content = clean_text(code_content)  # Bersihkan teks
-                    penjelasan_content = clean_text(penjelasan_content)  # Bersihkan teks
+                    code_content = clean_text(code_content)
+                    penjelasan_content = clean_text(penjelasan_content)
                     if parent_key in request.form:
                         main_sections[section_id]['parent_section'] = request.form[parent_key]
                     if code_key in request.form:
                         save_latex_to_txt_file(filename, code_content, f"code_{section_id}")
-                        main_sections[section_id]['code'] = code_content  # Simpan juga di metadata
+                        main_sections[section_id]['code'] = code_content
                         main_sections[section_id]['code_file'] = f"code_{section_id}_raw.txt"
                     if penjelasan_key in request.form:
                         save_latex_to_txt_file(filename, penjelasan_content, f"penjelasan_{section_id}")
-                        main_sections[section_id]['penjelasan'] = penjelasan_content  # Simpan juga di metadata
+                        main_sections[section_id]['penjelasan'] = penjelasan_content
                         main_sections[section_id]['penjelasan_file'] = f"penjelasan_{section_id}_raw.txt"
                     main_sections[section_id]['image'] = request.form.get(f'image_{section_id}', '').strip()
 
@@ -618,13 +767,35 @@ def index():
         }
         save_metadata_json(filename, metadata)
 
-        # Jika edit mode, salin file gambar dari folder lama
+        # Jika edit mode, salin file gambar dari folder lama di Google Drive
         if edit_mode and original_filename and original_filename != filename:
-            old_dir = os.path.join(app.config['UPLOAD_FOLDER'], original_filename)
-            if os.path.exists(old_dir):
-                for item in os.listdir(old_dir):
-                    if item.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.bmp', '.svg')) or 'lambang' in item.lower():
-                        shutil.copy2(os.path.join(old_dir, item), os.path.join(project_dir, item))
+            try:
+                old_folder_id = find_or_create_folder(original_filename)
+                new_folder_id = find_or_create_folder(filename)
+
+                # Cari semua file gambar di folder lama
+                query = f"'{old_folder_id}' in parents and trashed = false"
+                response = drive_client.files().list(
+                    q=query,
+                    spaces='drive',
+                    fields='files(id, name, mimeType)'
+                ).execute()
+                files = response.get('files', [])
+
+                for file in files:
+                    if file['mimeType'].startswith('image/') or 'lambang' in file['name'].lower():
+                        # Salin file ke folder baru
+                        file_metadata = {
+                            'name': file['name'],
+                            'parents': [new_folder_id]
+                        }
+                        drive_client.files().copy(
+                            fileId=file['id'],
+                            body=file_metadata
+                        ).execute()
+                        print(f"Copied {file['name']} from {original_filename} to {filename}")
+            except Exception as e:
+                print(f"❌ Error copying files from {original_filename} to {filename}: {e}")
 
         session['last_filename'] = filename
         flash('Data tersimpan sukses!', 'success')
@@ -632,7 +803,7 @@ def index():
 
     # Logika untuk GET
     last_filename = session.get('last_filename')
-    if last_filename and os.path.exists(os.path.join(app.config['UPLOAD_FOLDER'], last_filename)):
+    if last_filename:
         metadata = read_metadata_json(last_filename)
         for section_id in metadata.get('dasar_teori_sections', {}):
             content = read_latex_from_txt_file(last_filename, f"dasar_teori_{section_id}")
@@ -654,7 +825,7 @@ def index():
 def edit(filename):
     """Edit laporan dengan filename yang ditentukan"""
     try:
-        # Baca metadata dari file
+        # Baca metadata dari Google Drive
         metadata = read_metadata_json(filename)
         if not metadata:
             flash(f'File {filename} tidak ditemukan', 'error')
@@ -674,68 +845,24 @@ def edit(filename):
             
         # Load dasar teori section contents
         for section_id, section in metadata['dasar_teori_sections'].items():
-            file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename, f"dasar_teori_{section_id}_raw.txt")
-            if os.path.exists(file_path):
-                try:
-                    with open(file_path, 'r', encoding='utf-8') as f:
-                        content = f.read()
-                    section['content'] = content
-                    print(f"✓ Loaded dasar teori section {section_id}: {len(content)} chars")
-                except Exception as e:
-                    print(f"❌ Error loading dasar teori section {section_id}: {str(e)}")
-                    section['content'] = ""
-            else:
-                print(f"❌ File not found: {file_path}")
-                section['content'] = section.get('content', '')  # Fallback ke metadata jika ada
+            content = read_latex_from_txt_file(filename, f"dasar_teori_{section_id}")
+            section['content'] = content
+            print(f"✓ Loaded dasar teori section {section_id}: {len(content)} chars")
 
         # Load main sections (code & penjelasan)
         for section_id, section in metadata['main_sections'].items():
             if section.get('type') == 'subsection':
-                # Load code
-                code_path = os.path.join(app.config['UPLOAD_FOLDER'], filename, f"code_{section_id}_raw.txt")
-                if os.path.exists(code_path):
-                    try:
-                        with open(code_path, 'r', encoding='utf-8') as f:
-                            code = f.read()
-                        section['code'] = code
-                    except Exception as e:
-                        print(f"❌ Error loading code for {section_id}: {str(e)}")
-                        section['code'] = section.get('code', '')  # Fallback ke metadata jika ada
-                else:
-                    print(f"❌ Code file not found: {code_path}")
-                    section['code'] = section.get('code', '')
-
-                # Load penjelasan
-                penjelasan_path = os.path.join(app.config['UPLOAD_FOLDER'], filename, f"penjelasan_{section_id}_raw.txt")
-                if os.path.exists(penjelasan_path):
-                    try:
-                        with open(penjelasan_path, 'r', encoding='utf-8') as f:
-                            penjelasan = f.read()
-                        section['penjelasan'] = penjelasan
-                    except Exception as e:
-                        print(f"❌ Error loading penjelasan for {section_id}: {str(e)}")
-                        section['penjelasan'] = section.get('penjelasan', '')  # Fallback ke metadata jika ada
-                else:
-                    print(f"❌ Penjelasan file not found: {penjelasan_path}")
-                    section['penjelasan'] = section.get('penjelasan', '')
-
+                code = read_latex_from_txt_file(filename, f"code_{section_id}")
+                penjelasan = read_latex_from_txt_file(filename, f"penjelasan_{section_id}")
+                section['code'] = code
+                section['penjelasan'] = penjelasan
                 print(f"Section {section_id}: code={len(section.get('code', ''))}, penjelasan={len(section.get('penjelasan', ''))}")
 
         # Load other content
         for content_type in ['tujuan', 'kesimpulan', 'referensi']:
-            file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename, f"{content_type}_raw.txt")
-            if os.path.exists(file_path):
-                try:
-                    with open(file_path, 'r', encoding='utf-8') as f:
-                        content = f.read()
-                    metadata[content_type] = content
-                    print(f"✓ Loaded {content_type}: {len(content)} chars")
-                except Exception as e:
-                    print(f"❌ Error loading {content_type}: {str(e)}")
-                    metadata[content_type] = ""
-            else:
-                print(f"❌ File not found: {file_path}")
-                metadata[content_type] = ""
+            content = read_latex_from_txt_file(filename, content_type)
+            metadata[content_type] = content
+            print(f"✓ Loaded {content_type}: {len(content)} chars")
 
         # Set active session
         session['last_filename'] = filename
@@ -768,29 +895,37 @@ def generate_latex(filename):
     print(f"Generating LaTeX for {filename}")
     
     try:
-        # Baca metadata dari file
+        # Baca metadata dari Google Drive
         metadata = read_metadata_json(filename)
         if not metadata:
             flash(f'File {filename} tidak ditemukan', 'error')
             return redirect('/')
             
+        # Pastikan logo ada di Google Drive
+        project_folder_id = find_or_create_folder(filename)
+        logo_file_id = find_file_in_folder('lambang ugm.png', project_folder_id)
+        if not logo_file_id:
+            default_logo = os.path.join(app.static_folder, 'lambang ugm.png')
+            if os.path.exists(default_logo):
+                # Unggah logo ke Google Drive
+                file_metadata = {
+                    'name': 'lambang ugm.png',
+                    'parents': [project_folder_id]
+                }
+                media = MediaFileUpload(default_logo, mimetype='image/png')
+                drive_client.files().create(
+                    body=file_metadata,
+                    media_body=media,
+                    fields='id'
+                ).execute()
+                print(f"Uploaded lambang ugm.png to Google Drive for {filename}")
+
         # Process template
         latex_content = LATEX_TEMPLATE
         
-        # Baca dasar teori dari file teks
+        # Baca dasar teori dari Google Drive
         dasar_teori_sections = metadata.get('dasar_teori_sections', {})
         sections = metadata.get('main_sections', {})
-        
-        # Project folder path
-        project_dir = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-        os.makedirs(project_dir, exist_ok=True)
-        
-        # Add logo if needed
-        logo_path = os.path.join(project_dir, 'lambang ugm.png')
-        if not os.path.exists(logo_path):
-            default_logo = os.path.join(app.static_folder, 'lambang ugm.png')
-            if os.path.exists(default_logo):
-                shutil.copy(default_logo, logo_path)
         
         # Debug untuk dasar teori
         print(f"Found {len(dasar_teori_sections)} dasar teori sections")
@@ -833,24 +968,25 @@ def generate_latex(filename):
             latex_content = latex_content.replace(key, value)
             print(f"Replaced {key} with {len(value)} chars")
         
-        # Save LaTeX content to file
-        tex_file = os.path.join(project_dir, f"{filename}.tex")
-        with open(tex_file, 'w', encoding='utf-8') as f:
-            f.write(latex_content)
-        print(f"Saved LaTeX content to {tex_file}")
+        # Simpan file .tex sementara menggunakan tempfile
+        with tempfile.TemporaryDirectory() as temp_dir:
+            tex_file = os.path.join(temp_dir, f"{filename}.tex")
+            with open(tex_file, 'w', encoding='utf-8') as f:
+                f.write(latex_content)
+            print(f"Saved LaTeX content to {tex_file}")
+            
+            # Simpan path untuk digunakan di route download_tex
+            session['tex_file_path'] = tex_file
         
         # Collect images used in the document
         images = []
-        # From dasar teori sections
         for section in dasar_teori_sections.values():
             if section.get('image'):
                 images.append({'name': os.path.basename(section['image'])})
-        # From main sections
         for section in sections.values():
             if section.get('type') == 'subsection' and section.get('image'):
                 images.append({'name': os.path.basename(section['image'])})
-        # Add logo
-        if os.path.exists(logo_path):
+        if logo_file_id:
             images.append({'name': 'lambang ugm.png'})
         
         return render_template('output.html', 
@@ -869,51 +1005,72 @@ def generate_latex(filename):
 
 @app.route('/download_image_zip/<filename>')
 def download_image_zip(filename):
-    """Download all images as a ZIP file"""
-    project_dir = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-    if not os.path.exists(project_dir):
-        flash(f'Project folder {filename} not found', 'error')
-        return redirect(url_for('edit', filename=filename))
-    
-    # Collect all images
-    images = []
-    # From metadata
-    metadata = read_metadata_json(filename)
-    for section in metadata.get('dasar_teori_sections', {}).values():
-        if section.get('image'):
-            images.append(section['image'])
-    for section in metadata.get('main_sections', {}).values():
-        if section.get('type') == 'subsection' and section.get('image'):
-            images.append(section['image'])
-    # Add logo
-    logo_path = os.path.join(project_dir, 'lambang ugm.png')
-    if os.path.exists(logo_path):
-        images.append('lambang ugm.png')
-    
-    if not images:
-        flash('No images found to download', 'error')
+    """Download all images as a ZIP file from Google Drive"""
+    try:
+        # Collect all images from metadata
+        metadata = read_metadata_json(filename)
+        images = []
+        for section in metadata.get('dasar_teori_sections', {}).values():
+            if section.get('image'):
+                images.append(section['image'])
+        for section in metadata.get('main_sections', {}).values():
+            if section.get('type') == 'subsection' and section.get('image'):
+                images.append(section['image'])
+        # Add logo
+        project_folder_id = find_or_create_folder(filename)
+        logo_file_id = find_file_in_folder('lambang ugm.png', project_folder_id)
+        if logo_file_id:
+            images.append(f"{filename}/lambang ugm.png")
+
+        if not images:
+            flash('No images found to download', 'error')
+            return redirect(url_for('generate_latex', filename=filename))
+
+        # Create a ZIP file in memory
+        memory_file = io.BytesIO()
+        with ZipFile(memory_file, 'w') as zf:
+            for image_path in images:
+                # Pisahkan folder dan filename
+                parts = image_path.split('/')
+                if len(parts) < 2:
+                    continue
+                folder = '/'.join(parts[:-1])
+                image_name = parts[-1]
+
+                # Cari file di Google Drive
+                project_folder_id = find_or_create_folder(folder)
+                file_id = find_file_in_folder(image_name, project_folder_id)
+                if not file_id:
+                    continue
+
+                # Unduh file dari Google Drive
+                request = drive_client.files().get_media(fileId=file_id)
+                file_stream = io.BytesIO()
+                downloader = MediaIoBaseDownload(file_stream, request)
+                done = False
+                while not done:
+                    status, done = downloader.next_chunk()
+                file_stream.seek(0)
+
+                # Tambahkan ke ZIP
+                zf.writestr(image_name, file_stream.read())
+
+        memory_file.seek(0)
+        return send_file(
+            memory_file,
+            mimetype='application/zip',
+            as_attachment=True,
+            download_name=f"{filename}_images.zip"
+        )
+    except Exception as e:
+        print(f"❌ Error downloading images as ZIP: {e}")
+        flash('Error downloading images', 'error')
         return redirect(url_for('generate_latex', filename=filename))
-    
-    # Create a ZIP file in memory
-    memory_file = io.BytesIO()
-    with ZipFile(memory_file, 'w') as zf:
-        for image in images:
-            image_path = os.path.join(project_dir, os.path.basename(image))
-            if os.path.exists(image_path):
-                zf.write(image_path, os.path.basename(image))
-    
-    memory_file.seek(0)
-    return send_file(
-        memory_file,
-        mimetype='application/zip',
-        as_attachment=True,
-        download_name=f"{filename}_images.zip"
-    )
 
 @app.route('/download_tex/<filename>')
 def download_tex(filename):
-    tex_file = os.path.join(app.config['UPLOAD_FOLDER'], filename, f"{filename}.tex")
-    if os.path.exists(tex_file):
+    tex_file = session.get('tex_file_path')
+    if tex_file and os.path.exists(tex_file):
         return send_file(tex_file, as_attachment=True, download_name=f"{filename}.tex")
     flash('File LaTeX tidak ditemukan', 'error')
     return redirect(url_for('edit', filename=filename))
@@ -974,82 +1131,136 @@ def convert_to_latex():
 
 @app.route('/upload', methods=['POST'])
 def upload_file():
-    """Handle file upload with proper path construction"""
+    """Handle file upload to Google Drive"""
     if 'image' not in request.files:
         return jsonify({'error': 'No file part'}), 400
-        
+
     file = request.files['image']
-    
+
     if file.filename == '':
         return jsonify({'error': 'No selected file'}), 400
-        
+
     if not allowed_file(file.filename):
         return jsonify({'error': 'File type not allowed'}), 400
-    
+
     # Get the folder to save to (project folder)
     folder = request.form.get('folder', 'temp')
-    
-    # Ensure folder exists
-    upload_folder = os.path.join(app.config['UPLOAD_FOLDER'], folder)
-    os.makedirs(upload_folder, exist_ok=True)
-    
+
     # Generate unique filename
     timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
     rand_suffix = uuid.uuid4().hex[:6]  # Add randomness to prevent collisions
     filename = secure_filename(f"img_{timestamp}_{rand_suffix}.png")
-    filepath = os.path.join(upload_folder, filename)
-    
-    # Process and save image
-    if Image and file.content_type.startswith('image/'):
-        try:
-            img = Image.open(file)
-            # Convert to RGB if needed (in case of transparent PNGs)
-            if img.mode == 'RGBA':
-                img = img.convert('RGB')
-                
-            # Resize if too large
-            max_size = 1200
-            if max(img.size) > max_size:
-                ratio = max_size / max(img.size)
-                img = img.resize((int(img.size[0] * ratio), int(img.size[1] * ratio)), Image.LANCZOS)
-                
-            # Save with optimization
-            img.save(filepath, 'PNG', optimize=True)
-            print(f"Image saved to {filepath}")
-        except Exception as e:
-            print(f"Error processing image: {e}")
-            file.save(filepath)
-    else:
-        file.save(filepath)
-    
-    # Return proper relative URL path that includes the folder
-    file_url = f"/static/uploads/{folder}/{filename}"
-    
-    return jsonify({
-        'success': True,
-        'filename': filename,
-        'filepath': file_url  # This is what frontend should use
-    })
 
-@app.route('/get-image/<filename>')
-def get_image(filename):
-    """Find image in various possible locations"""
-    # Try direct path first (for backward compatibility)
-    direct_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-    if os.path.isfile(direct_path):
-        return send_file(direct_path)
-    
-    # Try in each project folder
-    projects_dir = app.config['UPLOAD_FOLDER']
-    for project in os.listdir(projects_dir):
-        project_path = os.path.join(projects_dir, project)
-        if os.path.isdir(project_path):
-            img_path = os.path.join(project_path, filename)
-            if os.path.isfile(img_path):
-                return send_file(img_path)
-    
-    # Image not found
-    return "Image not found", 404
+    # Gunakan tempfile untuk membuat file sementara
+    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.png')
+    temp_file_path = temp_file.name
+
+    try:
+        if Image and file.content_type.startswith('image/'):
+            try:
+                img = Image.open(file)
+                # Convert to RGB if needed (in case of transparent PNGs)
+                if img.mode == 'RGBA':
+                    img = img.convert('RGB')
+
+                # Resize if too large
+                max_size = 1200
+                if max(img.size) > max_size:
+                    ratio = max_size / max(img.size)
+                    img = img.resize((int(img.size[0] * ratio), int(img.size[1] * ratio)), Image.LANCZOS)
+
+                # Save with optimization
+                img.save(temp_file_path, 'PNG', optimize=True)
+                print(f"Image temporarily saved to {temp_file_path}")
+            except Exception as e:
+                print(f"Error processing image: {e}")
+                file.save(temp_file_path)
+        else:
+            file.save(temp_file_path)
+
+        # Pastikan file ditutup sebelum diunggah
+        temp_file.close()
+
+        # Upload ke Google Drive
+        try:
+            project_folder_id = find_or_create_folder(folder)
+            file_id = find_file_in_folder(filename, project_folder_id)
+
+            if file_id:
+                # Update file jika sudah ada
+                media = MediaFileUpload(temp_file_path, mimetype='image/png')
+                drive_client.files().update(
+                    fileId=file_id,
+                    media_body=media
+                ).execute()
+            else:
+                # Buat file baru jika belum ada
+                file_metadata = {
+                    'name': filename,
+                    'parents': [project_folder_id]
+                }
+                media = MediaFileUpload(temp_file_path, mimetype='image/png')
+                drive_client.files().create(
+                    body=file_metadata,
+                    media_body=media,
+                    fields='id'
+                ).execute()
+
+            # Simpan path relatif untuk metadata
+            file_path = f"{folder}/{filename}"
+            return jsonify({
+                'success': True,
+                'filename': filename,
+                'filepath': file_path  # Path relatif untuk digunakan di metadata
+            })
+        except Exception as e:
+            print(f"❌ Error uploading image to Google Drive: {e}")
+            return jsonify({'error': str(e)}), 500
+    finally:
+        # Hapus file sementara dengan penundaan kecil untuk memastikan file tidak digunakan
+        import time
+        time.sleep(0.1)  # Tunggu 100ms
+        try:
+            if os.path.exists(temp_file_path):
+                os.remove(temp_file_path)
+                print(f"Deleted temporary file {temp_file_path}")
+        except Exception as e:
+            print(f"❌ Error deleting temporary file {temp_file_path}: {e}")
+
+@app.route('/get-image/<path:filepath>')
+def get_image(filepath):
+    """Mengambil gambar dari Google Drive berdasarkan filepath (folder/filename)"""
+    try:
+        # Pisahkan folder dan filename dari filepath
+        parts = filepath.split('/')
+        if len(parts) < 2:
+            return "Invalid filepath format", 400
+        folder = '/'.join(parts[:-1])
+        filename = parts[-1]
+
+        # Cari folder proyek di Google Drive
+        project_folder_id = find_or_create_folder(folder)
+        file_id = find_file_in_folder(filename, project_folder_id)
+        if not file_id:
+            return "Image not found", 404
+
+        # Unduh gambar dari Google Drive
+        request = drive_client.files().get_media(fileId=file_id)
+        file_stream = io.BytesIO()
+        downloader = MediaIoBaseDownload(file_stream, request)
+        done = False
+        while not done:
+            status, done = downloader.next_chunk()
+        file_stream.seek(0)
+
+        return send_file(
+            file_stream,
+            mimetype='image/png',
+            as_attachment=False
+        )
+    except Exception as e:
+        print(f"❌ Error retrieving image from Google Drive: {e}")
+        return "Image not found", 404
 
 @app.errorhandler(404)
 def not_found(e):

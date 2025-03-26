@@ -441,12 +441,12 @@
                             <div id="dasar_teori_preview_${sectionId}" class="image-preview">
                                 ${image ? `
                                     <div class="relative">
-                                        <img src="${getImagePath(image)}" alt="Preview">
-                                        <button type="button" id="btn-remove-img-dt-${sectionId}"
-                                                class="absolute top-2 right-2 bg-red-600 text-white rounded-full w-6 h-6 flex items-center justify-center hover:bg-red-700">
-                                            ×
-                                        </button>
-                                    </div>
+    <img src="{{ url_for('get_image', filepath=image) }}" alt="Preview" class="max-h-48 object-contain" onerror="this.src='/static/placeholder.png';">
+    <button type="button" id="btn-remove-img-dt-${sectionId}"
+            class="absolute top-2 right-2 bg-red-600 text-white rounded-full w-6 h-6 flex items-center justify-center hover:bg-red-700">
+        ×
+    </button>
+</div>
                                 ` : ''}
                             </div>
                         </div>
@@ -559,12 +559,12 @@
                             <div id="preview_${subsectionId}" class="image-preview">
                                 ${image ? `
                                     <div class="relative">
-                                        <img src="${getImagePath(image)}" alt="Preview">
-                                        <button type="button" id="btn-remove-img-${subsectionId}"
-                                                class="absolute top-2 right-2 bg-red-600 text-white rounded-full w-6 h-6 flex items-center justify-center hover:bg-red-700">
-                                            ×
-                                        </button>
-                                    </div>
+    <img src="{{ url_for('get_image', filepath=image) }}" alt="Preview" class="max-h-48 object-contain" onerror="this.src='/static/placeholder.png';">
+    <button type="button" id="btn-remove-img-${subsectionId}"
+            class="absolute top-2 right-2 bg-red-600 text-white rounded-full w-6 h-6 flex items-center justify-center hover:bg-red-700">
+        ×
+    </button>
+</div>
                                 ` : ''}
                             </div>
                         </div>
@@ -714,12 +714,11 @@
                     const preview = document.getElementById(previewId);
                     preview.innerHTML = `
                         <div class="relative">
-                            <img src="${imagePath}" alt="Preview" onerror="this.onerror=null;this.src='/static/placeholder-image.png';">
-                            <button type="button" class="remove-image-btn" data-input="${inputId}" data-preview="${previewId}"
-                                    class="absolute top-2 right-2 bg-red-600 text-white rounded-full w-6 h-6 flex items-center justify-center hover:bg-red-700">
-                                ×
-                            </button>
-                        </div>
+    <img id="${previewId}" src="{% if imagePath %}{{ url_for('get_image', filepath=imagePath) }}{% else %}/static/placeholder.png{% endif %}" alt="Preview" class="max-h-48 object-contain" onerror="this.src='/static/placeholder.png';">
+    <button type="button" class="remove-image-btn absolute top-2 right-2 bg-red-600 text-white rounded-full w-6 h-6 flex items-center justify-center hover:bg-red-700" data-input="${inputId}" data-preview="${previewId}">
+        ×
+    </button>
+</div>
                     `;
                     
                     // Tambahkan event listener untuk tombol hapus
